@@ -1,0 +1,17 @@
+.build/
+dist/
+docs/
+tasks/
+.swiftpm/
+DerivedData/
+.codex/
+output/
+.DS_Store
+.env
+.env.*
+*.sqlite
+*.sqlite-*
+*.db
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
