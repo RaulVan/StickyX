@@ -49,6 +49,34 @@ final class AppModelTests: XCTestCase {
     XCTAssertEqual(model.colorCount(for: .yellow), 0)
   }
 
+  func testContentUpdateRefreshesOnlyVisibleNoteStateAndChecklist() throws {
+    let database = try makeDatabaseWithSeedNote()
+    let model = AppModel(database: database)
+    let note = try XCTUnwrap(model.notes.first)
+    let content = NSAttributedString(string: "Updated title\n☐ Follow up", attributes: StickyTextFormatter.defaultAttributes)
+
+    model.updateContent(noteID: note.id, attributedText: content)
+
+    XCTAssertEqual(model.notes.first(where: { $0.id == note.id })?.title, "Updated title")
+    XCTAssertEqual(model.checklistItems[note.id]?.count, 1)
+    XCTAssertEqual(try database.note(id: note.id)?.plainText, content.string)
+  }
+
+  func testContentUpdateRemovesNoteThatNoLongerMatchesSearch() throws {
+    let database = try makeDatabaseWithSeedNote()
+    let model = AppModel(database: database)
+    let note = try XCTUnwrap(model.notes.first)
+    model.searchText = "Seed"
+    XCTAssertEqual(model.notes.map(\.id), [note.id])
+
+    model.updateContent(
+      noteID: note.id,
+      attributedText: NSAttributedString(string: "Different content", attributes: StickyTextFormatter.defaultAttributes)
+    )
+
+    XCTAssertTrue(model.notes.isEmpty)
+  }
+
   private func makeDatabaseWithSeedNote() throws -> AppDatabase {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)

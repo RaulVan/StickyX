@@ -121,6 +121,10 @@ enum L10n {
     isChinese(language) ? "当前：\(title)" : "Selected: \(title)"
   }
 
+  static func emptyTagTitle(_ name: String, language: AppLanguage = .current) -> String {
+    isChinese(language) ? "\(name)中没有便笺" : "No Notes in \(name)"
+  }
+
   static func noteAccessibilityLabel(title: String, colorName: String, language: AppLanguage = .current) -> String {
     [title, colorName].joined(separator: isChinese(language) ? "，" : ", ")
   }
@@ -175,6 +179,13 @@ enum L10n {
     case .selectNote: return zh ? "选择一份便笺" : "Select a note"
     case .emptyNotesTitle: return zh ? "没有便笺" : "No Notes"
     case .emptyNotesDescription: return zh ? "创建一份便笺开始记录。" : "Create a note to start writing."
+    case .noSearchResultsTitle: return zh ? "未找到便笺" : "No Results"
+    case .noSearchResultsDescription: return zh ? "请尝试其他关键词。" : "Try a different search term."
+    case .emptyFavoritesTitle: return zh ? "暂无收藏" : "No Favorites"
+    case .emptyFavoritesDescription: return zh ? "收藏的便笺会显示在这里。" : "Favorite notes appear here."
+    case .emptyTrashStateTitle: return zh ? "废纸篓为空" : "Trash is Empty"
+    case .emptyTrashStateDescription: return zh ? "删除的便笺会显示在这里。" : "Deleted notes appear here."
+    case .emptyTagDescription: return zh ? "在当前标签中新建一份便笺。" : "Create a note in the current tag."
     case .emptyNotePlaceholder: return zh ? "开始输入..." : "Start typing..."
     case .emptyTrashTitle: return zh ? "清空废纸篓？" : "Empty Trash?"
     case .emptyTrashMessage: return zh ? "将永久删除废纸篓中的所有便笺。" : "All notes in Trash will be permanently deleted."
@@ -237,6 +248,13 @@ enum L10n {
     case selectNote
     case emptyNotesTitle
     case emptyNotesDescription
+    case noSearchResultsTitle
+    case noSearchResultsDescription
+    case emptyFavoritesTitle
+    case emptyFavoritesDescription
+    case emptyTrashStateTitle
+    case emptyTrashStateDescription
+    case emptyTagDescription
     case emptyNotePlaceholder
     case emptyTrashTitle
     case emptyTrashMessage

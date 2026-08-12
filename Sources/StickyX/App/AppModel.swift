@@ -35,6 +35,11 @@ final class AppModel: ObservableObject {
     return notes.first { $0.id == selectedNoteID }
   }
 
+  var commandTargetNote: StickyNote? {
+    guard let noteID = commandTargetNoteID() else { return nil }
+    return noteByID(noteID)
+  }
+
   init(database: AppDatabase? = try? AppDatabase()) {
     self.database = database
     do {
@@ -48,19 +53,17 @@ final class AppModel: ObservableObject {
   func reload() {
     guard let database else { return }
     do {
-      // Search is applied first, then narrowed by the current sidebar filter.
+      // Keep filtering inside SQLite so Favorites, color tags, and Trash share search semantics.
       let fetched = searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ? try database.fetchNotes(filter: filter)
-        : try database.searchNotes(searchText).filter { note in matchesCurrentFilter(note) }
+        : try database.searchNotes(searchText, filter: filter)
       colorTags = try database.fetchColorTags()
       colorCounts = try database.fetchColorCounts()
       notes = fetched
       if selectedNoteID == nil || !fetched.contains(where: { $0.id == selectedNoteID }) {
         selectedNoteID = fetched.first?.id
       }
-      checklistItems = Dictionary(uniqueKeysWithValues: try fetched.map { note in
-        (note.id, try database.fetchChecklistItems(noteID: note.id))
-      })
+      checklistItems = try database.fetchChecklistItems(noteIDs: fetched.map(\.id))
       windowManager.applyVisibleState(notes: fetched, model: self)
     } catch {
       lastError = error.localizedDescription
@@ -85,17 +88,17 @@ final class AppModel: ObservableObject {
       if shouldOpenOnDesktop {
         note.isOnDesktop = true
         note.isTranslucent = defaults.bool(forKey: "defaultTranslucent")
-        try database.saveNote(note)
+        note = try database.saveNote(note)
       }
-      if case .color = sourceFilter {
-        filter = sourceFilter
+      let targetFilter: NoteFilter = if case .color = sourceFilter { sourceFilter } else { .dashboard }
+      if filter == targetFilter {
+        reload()
       } else {
-        filter = .dashboard
+        filter = targetFilter
       }
       selectedNoteID = note.id
-      reload()
       if shouldOpenOnDesktop {
-        toggleDesktopWindow(noteID: note.id, forceOpen: true)
+        windowManager.show(noteID: note.id, model: self)
       }
     } catch {
       lastError = error.localizedDescription
@@ -121,8 +124,9 @@ final class AppModel: ObservableObject {
     note.plainText = normalized.string
     note.title = StickyTextFormatter.title(from: normalized.string)
     do {
-      try database.saveNote(note)
-      reload()
+      let savedNote = try database.saveNote(note)
+      checklistItems[noteID] = ChecklistParser.extractItems(from: savedNote.plainText, noteID: noteID)
+      updateVisibleNote(savedNote)
     } catch {
       lastError = error.localizedDescription
     }
@@ -176,12 +180,11 @@ final class AppModel: ObservableObject {
   }
 
   func syncSelectionWithDesktopNote(noteID: String) {
-    guard notes.contains(where: { $0.id == noteID }) else { return }
     selectedNoteID = noteID
   }
 
   func toggleSelectedDesktopWindow() {
-    guard let id = selectedNoteID else { return }
+    guard let id = commandTargetNoteID() else { return }
     toggleDesktopWindow(noteID: id)
   }
 
@@ -224,13 +227,18 @@ final class AppModel: ObservableObject {
   }
 
   func saveWindowFrame(noteID: String, frame: NSRect) {
-    mutate(noteID: noteID) { note in
-      note.windowX = frame.origin.x
-      note.windowY = frame.origin.y
-      note.windowWidth = frame.width
-      if !note.isCollapsed {
-        note.windowHeight = frame.height
-      }
+    guard let database, let note = noteByID(noteID) else { return }
+    do {
+      // Window dragging must not rebuild search/checklist projections or refresh the Dashboard.
+      try database.updateWindowFrame(
+        noteID: noteID,
+        x: frame.origin.x,
+        y: frame.origin.y,
+        width: frame.width,
+        expandedHeight: note.isCollapsed ? nil : frame.height
+      )
+    } catch {
+      lastError = error.localizedDescription
     }
   }
 
@@ -252,7 +260,7 @@ final class AppModel: ObservableObject {
   }
 
   func toggleSelectedFloatOnTop() {
-    guard let id = selectedNoteID else { return }
+    guard let id = commandTargetNoteID() else { return }
     mutate(noteID: id) { $0.isFloatOnTop.toggle() }
     if let note = noteByID(id) {
       windowManager.applyVisibleState(notes: [note], model: self)
@@ -260,7 +268,7 @@ final class AppModel: ObservableObject {
   }
 
   func toggleSelectedTranslucent() {
-    guard let id = selectedNoteID else { return }
+    guard let id = commandTargetNoteID() else { return }
     mutate(noteID: id) { $0.isTranslucent.toggle() }
     if let note = noteByID(id) {
       windowManager.applyVisibleState(notes: [note], model: self)
@@ -268,7 +276,7 @@ final class AppModel: ObservableObject {
   }
 
   func toggleSelectedCollapsed() {
-    guard let id = selectedNoteID else { return }
+    guard let id = commandTargetNoteID() else { return }
     toggleCollapsed(noteID: id)
   }
 
@@ -290,7 +298,7 @@ final class AppModel: ObservableObject {
   }
 
   func setSelectedColor(_ color: StickyColor) {
-    guard let id = selectedNoteID else { return }
+    guard let id = commandTargetNoteID() else { return }
     setColor(noteID: id, color: color)
   }
 
@@ -344,8 +352,12 @@ final class AppModel: ObservableObject {
     guard let database else { return }
     do {
       try database.restore(noteID: noteID)
-      filter = .dashboard
-      reload()
+      if filter == .dashboard {
+        reload()
+      } else {
+        filter = .dashboard
+      }
+      selectedNoteID = noteID
     } catch {
       lastError = error.localizedDescription
     }
@@ -397,7 +409,7 @@ final class AppModel: ObservableObject {
   }
 
   func exportSelectedText() {
-    guard let note = selectedNote else { return }
+    guard let note = commandTargetNote else { return }
     let panel = NSSavePanel()
     panel.nameFieldStringValue = "\(note.title).rtf"
     panel.allowedContentTypes = [.rtf, .rtfd, .plainText]
@@ -410,7 +422,7 @@ final class AppModel: ObservableObject {
   }
 
   func printSelectedNote() {
-    guard let note = selectedNote else { return }
+    guard let note = commandTargetNote else { return }
     let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 720))
     textView.textStorage?.setAttributedString(attributedText(for: note))
     textView.isRichText = true
@@ -428,31 +440,55 @@ final class AppModel: ObservableObject {
   }
 
   func arrangeDesktopNotes(by mode: ArrangeMode) {
-    var visible = notes.filter { $0.isOnDesktop && !$0.isDeleted }
-    switch mode {
-    case .date:
-      visible.sort { $0.updatedAt > $1.updatedAt }
-    case .color:
-      visible.sort { $0.colorRaw < $1.colorRaw }
-    case .content:
-      visible.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-    case .screenPosition:
-      visible.sort {
-        (($0.windowY ?? 0), ($0.windowX ?? 0)) > (($1.windowY ?? 0), ($1.windowX ?? 0))
+    guard let database else { return }
+    do {
+      // Arrangement is global desktop state and must not depend on the current sidebar/search filter.
+      var visible = try database.fetchNotes(filter: .dashboard).filter(\.isOnDesktop)
+      switch mode {
+      case .date:
+        visible.sort { $0.updatedAt > $1.updatedAt }
+      case .color:
+        visible.sort { $0.colorRaw < $1.colorRaw }
+      case .content:
+        visible.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+      case .screenPosition:
+        visible.sort {
+          (($0.windowY ?? 0), ($0.windowX ?? 0)) > (($1.windowY ?? 0), ($1.windowX ?? 0))
+        }
       }
-    }
-    for (index, note) in visible.enumerated() {
-      let column = index % 3
-      let row = index / 3
-      mutate(noteID: note.id) { updated in
-        updated.windowX = 720 + Double(column * 320)
-        updated.windowY = 620 - Double(row * 250)
-        updated.windowWidth = updated.windowWidth ?? 300
-        updated.windowHeight = updated.windowHeight ?? 220
+
+      let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+      let padding: CGFloat = 24
+      let gap: CGFloat = 16
+      let cellWidth = visible.reduce(CGFloat(StickyWindowLayout.defaultWidth)) { result, note in
+        max(result, CGFloat(StickyWindowLayout.displayWidth(savedWidth: note.windowWidth)))
       }
-      if let arranged = noteByID(note.id) {
-        windowManager.show(noteID: arranged.id, model: self)
+      let cellHeight = visible.reduce(CGFloat(StickyWindowLayout.defaultExpandedHeight)) { result, note in
+        max(result, CGFloat(StickyWindowLayout.displayHeight(isCollapsed: note.isCollapsed, savedHeight: note.windowHeight)))
       }
+      let availableWidth = max(screenFrame.width - (padding * 2), cellWidth)
+      let columnCount = max(1, min(3, Int((availableWidth + gap) / (cellWidth + gap))))
+
+      for (index, note) in visible.enumerated() {
+        let width = CGFloat(StickyWindowLayout.displayWidth(savedWidth: note.windowWidth))
+        let expandedHeight = CGFloat(StickyWindowLayout.displayHeight(isCollapsed: false, savedHeight: note.windowHeight))
+        let displayedHeight = note.isCollapsed ? CGFloat(StickyWindowLayout.collapsedHeight) : expandedHeight
+        let column = index % columnCount
+        let row = index / columnCount
+        let x = screenFrame.minX + padding + CGFloat(column) * (cellWidth + gap)
+        let y = screenFrame.maxY - padding - displayedHeight - CGFloat(row) * (cellHeight + gap)
+        try database.updateWindowFrame(
+          noteID: note.id,
+          x: x,
+          y: y,
+          width: width,
+          expandedHeight: expandedHeight
+        )
+      }
+      reload()
+      visible.forEach { windowManager.show(noteID: $0.id, model: self) }
+    } catch {
+      lastError = error.localizedDescription
     }
   }
 
@@ -475,13 +511,52 @@ final class AppModel: ObservableObject {
     return note.id
   }
 
-  private func mutate(noteID: String, body: (inout StickyNote) -> Void) {
-    guard let database else { return }
+  @discardableResult
+  private func mutate(noteID: String, body: (inout StickyNote) -> Void) -> StickyNote? {
+    guard let database else { return nil }
     do {
-      try database.mutate(noteID: noteID, body)
+      let updated = try database.mutate(noteID: noteID, body)
       reload()
+      return updated
     } catch {
       lastError = error.localizedDescription
+      return nil
+    }
+  }
+
+  private func updateVisibleNote(_ note: StickyNote) {
+    let shouldDisplay = matchesCurrentFilter(note) && matchesSearch(note)
+    if let index = notes.firstIndex(where: { $0.id == note.id }) {
+      if shouldDisplay {
+        notes[index] = note
+      } else {
+        notes.remove(at: index)
+      }
+    } else if shouldDisplay {
+      notes.append(note)
+    }
+
+    let hasSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    if hasSearch || filter != .dashboard {
+      notes.sort { $0.updatedAt > $1.updatedAt }
+    } else {
+      notes.sort {
+        $0.sortIndex == $1.sortIndex ? $0.updatedAt > $1.updatedAt : $0.sortIndex < $1.sortIndex
+      }
+    }
+  }
+
+  private func matchesSearch(_ note: StickyNote) -> Bool {
+    let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedQuery.isEmpty else { return true }
+    let tokens = trimmedQuery.split { !$0.isLetter && !$0.isNumber }
+    guard !tokens.isEmpty else { return false }
+    let searchableText = "\(note.title)\n\(note.plainText)"
+    return tokens.allSatisfy { token in
+      searchableText.range(
+        of: String(token),
+        options: [.caseInsensitive, .diacriticInsensitive]
+      ) != nil
     }
   }
 

@@ -74,19 +74,52 @@ public final class AppDatabase {
     }
   }
 
-  public func searchNotes(_ rawQuery: String) throws -> [StickyNote] {
+  public func searchNotes(_ rawQuery: String, filter: NoteFilter = .dashboard) throws -> [StickyNote] {
+    let trimmedQuery = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedQuery.isEmpty else { return try fetchNotes(filter: filter) }
+
+    if filter == .trash {
+      // Deleted notes are intentionally absent from FTS, so Trash uses a direct substring search.
+      return try dbQueue.read { db in
+        try StickyNote.fetchAll(
+          db,
+          sql: """
+          SELECT * FROM sticky_notes
+          WHERE isDeleted = 1
+            AND (INSTR(LOWER(title), LOWER(?)) > 0 OR INSTR(LOWER(plainText), LOWER(?)) > 0)
+          ORDER BY deletedAt DESC
+          """,
+          arguments: [trimmedQuery, trimmedQuery]
+        )
+      }
+    }
+
     let query = Self.ftsQuery(rawQuery)
-    guard !query.isEmpty else { return try fetchNotes() }
+    guard !query.isEmpty else { return [] }
+    let filterClause: String
+    var arguments: StatementArguments = [query]
+    switch filter {
+    case .dashboard:
+      filterClause = "n.isDeleted = 0"
+    case .favorites:
+      filterClause = "n.isDeleted = 0 AND n.isFavorite = 1"
+    case .trash:
+      return []
+    case .color(let color):
+      filterClause = "n.isDeleted = 0 AND n.colorRaw = ?"
+      arguments += [color.rawValue]
+    }
+
     return try dbQueue.read { db in
       try StickyNote.fetchAll(
         db,
         sql: """
         SELECT n.* FROM sticky_notes n
         JOIN sticky_notes_fts ON sticky_notes_fts.id = n.id
-        WHERE sticky_notes_fts MATCH ? AND n.isDeleted = 0
+        WHERE sticky_notes_fts MATCH ? AND \(filterClause)
         ORDER BY n.updatedAt DESC
         """,
-        arguments: [query]
+        arguments: arguments
       )
     }
   }
@@ -98,6 +131,21 @@ public final class AppDatabase {
         sql: "SELECT * FROM checklist_items WHERE noteID = ? ORDER BY lineNumber ASC",
         arguments: [noteID]
       )
+    }
+  }
+
+  public func fetchChecklistItems(noteIDs: [String]) throws -> [String: [ChecklistItem]] {
+    guard !noteIDs.isEmpty else { return [:] }
+    return try dbQueue.read { db in
+      let items = try ChecklistItem
+        .filter(noteIDs.contains(Column("noteID")))
+        .order(Column("noteID"), Column("lineNumber"))
+        .fetchAll(db)
+      var grouped = Dictionary(uniqueKeysWithValues: noteIDs.map { ($0, [ChecklistItem]()) })
+      for item in items {
+        grouped[item.noteID, default: []].append(item)
+      }
+      return grouped
     }
   }
 
@@ -158,7 +206,8 @@ public final class AppDatabase {
     }
   }
 
-  public func saveNote(_ note: StickyNote) throws {
+  @discardableResult
+  public func saveNote(_ note: StickyNote) throws -> StickyNote {
     try dbQueue.write { db in
       var updated = note
       updated.updatedAt = Date()
@@ -166,6 +215,26 @@ public final class AppDatabase {
       try updated.save(db)
       try Self.refreshFTS(db, note: updated)
       try Self.replaceChecklistItems(db, noteID: updated.id, plainText: updated.plainText)
+      return updated
+    }
+  }
+
+  public func updateWindowFrame(
+    noteID: String,
+    x: Double,
+    y: Double,
+    width: Double,
+    expandedHeight: Double?
+  ) throws {
+    try dbQueue.write { db in
+      try db.execute(
+        sql: """
+        UPDATE sticky_notes
+        SET windowX = ?, windowY = ?, windowWidth = ?, windowHeight = COALESCE(?, windowHeight)
+        WHERE id = ?
+        """,
+        arguments: [x, y, width, expandedHeight, noteID]
+      )
     }
   }
 
@@ -223,15 +292,23 @@ public final class AppDatabase {
     }
   }
 
-  public func mutate(noteID: String, _ body: (inout StickyNote) throws -> Void) throws {
+  @discardableResult
+  public func mutate(noteID: String, _ body: (inout StickyNote) throws -> Void) throws -> StickyNote? {
     try dbQueue.write { db in
-      guard var note = try StickyNote.fetchOne(db, key: noteID) else { return }
+      guard var note = try StickyNote.fetchOne(db, key: noteID) else { return nil }
+      let previousTitle = note.title
+      let previousPlainText = note.plainText
+      let wasDeleted = note.isDeleted
       try body(&note)
       note.updatedAt = Date()
       try note.save(db)
-      // Keep denormalized search and checklist tables in sync with every note mutation.
-      try Self.refreshFTS(db, note: note)
-      try Self.replaceChecklistItems(db, noteID: note.id, plainText: note.plainText)
+      if note.title != previousTitle || note.plainText != previousPlainText || note.isDeleted != wasDeleted {
+        try Self.refreshFTS(db, note: note)
+      }
+      if note.plainText != previousPlainText {
+        try Self.replaceChecklistItems(db, noteID: note.id, plainText: note.plainText)
+      }
+      return note
     }
   }
 }

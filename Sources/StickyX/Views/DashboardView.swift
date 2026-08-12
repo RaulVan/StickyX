@@ -12,11 +12,7 @@ struct DashboardView: View {
   var body: some View {
     VStack(spacing: 0) {
       if model.notes.isEmpty {
-        ContentUnavailableView(
-          L10n.string(.emptyNotesTitle, language: appLanguage),
-          systemImage: "note.text",
-          description: Text(L10n.string(.emptyNotesDescription, language: appLanguage))
-        )
+        emptyState
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else if model.isGridView {
         ScrollViewReader { proxy in
@@ -51,6 +47,78 @@ struct DashboardView: View {
       }
     }
     .background(Color(nsColor: .textBackgroundColor).opacity(0.55))
+  }
+
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label(emptyStateTitle, systemImage: emptyStateSystemImage)
+    } description: {
+      Text(emptyStateDescription)
+    } actions: {
+      if canCreateFromEmptyState {
+        Button {
+          model.createNote()
+        } label: {
+          Label(L10n.string(.newNote, language: appLanguage), systemImage: "square.and.pencil")
+        }
+      }
+    }
+  }
+
+  private var emptyStateTitle: String {
+    if hasSearchQuery {
+      return L10n.string(.noSearchResultsTitle, language: appLanguage)
+    }
+    switch model.filter {
+    case .dashboard:
+      return L10n.string(.emptyNotesTitle, language: appLanguage)
+    case .favorites:
+      return L10n.string(.emptyFavoritesTitle, language: appLanguage)
+    case .trash:
+      return L10n.string(.emptyTrashStateTitle, language: appLanguage)
+    case .color(let color):
+      return L10n.emptyTagTitle(model.displayName(for: color, language: appLanguage), language: appLanguage)
+    }
+  }
+
+  private var emptyStateDescription: String {
+    if hasSearchQuery {
+      return L10n.string(.noSearchResultsDescription, language: appLanguage)
+    }
+    switch model.filter {
+    case .dashboard:
+      return L10n.string(.emptyNotesDescription, language: appLanguage)
+    case .favorites:
+      return L10n.string(.emptyFavoritesDescription, language: appLanguage)
+    case .trash:
+      return L10n.string(.emptyTrashStateDescription, language: appLanguage)
+    case .color:
+      return L10n.string(.emptyTagDescription, language: appLanguage)
+    }
+  }
+
+  private var emptyStateSystemImage: String {
+    if hasSearchQuery { return "magnifyingglass" }
+    switch model.filter {
+    case .dashboard: return "note.text"
+    case .favorites: return "star"
+    case .trash: return "trash"
+    case .color: return "tag"
+    }
+  }
+
+  private var canCreateFromEmptyState: Bool {
+    guard !hasSearchQuery else { return false }
+    switch model.filter {
+    case .dashboard, .color:
+      return true
+    case .favorites, .trash:
+      return false
+    }
+  }
+
+  private var hasSearchQuery: Bool {
+    !model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private func scrollToTop(_ proxy: ScrollViewProxy) {

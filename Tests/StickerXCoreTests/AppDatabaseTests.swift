@@ -93,6 +93,46 @@ final class AppDatabaseTests: XCTestCase {
     XCTAssertEqual(counts[.yellow], 0)
   }
 
+  func testSearchRespectsCurrentFilterAndIncludesTrash() throws {
+    let database = try makeDatabase()
+    let favorite = try database.createNote(title: "Release Plan", plainText: "Ship desktop build", color: .blue)
+    let green = try database.createNote(title: "Release Notes", plainText: "Document changes", color: .green)
+    let deleted = try database.createNote(title: "Archived Release", plainText: "Old plan", color: .pink)
+    try database.mutate(noteID: favorite.id) { $0.isFavorite = true }
+    try database.softDelete(noteID: deleted.id)
+
+    XCTAssertEqual(try database.searchNotes("Release", filter: .favorites).map(\.id), [favorite.id])
+    XCTAssertEqual(try database.searchNotes("Release", filter: .color(.green)).map(\.id), [green.id])
+    XCTAssertEqual(try database.searchNotes("Release", filter: .trash).map(\.id), [deleted.id])
+    XCTAssertFalse(try database.searchNotes("Release", filter: .dashboard).contains(where: { $0.id == deleted.id }))
+  }
+
+  func testBatchChecklistFetchIncludesNotesWithoutItems() throws {
+    let database = try makeDatabase()
+    let checklist = try database.createNote(title: "Tasks", plainText: "☐ One\n☑ Two", color: .yellow)
+    let plain = try database.createNote(title: "Plain", plainText: "No tasks", color: .gray)
+
+    let grouped = try database.fetchChecklistItems(noteIDs: [checklist.id, plain.id])
+
+    XCTAssertEqual(grouped[checklist.id]?.count, 2)
+    XCTAssertEqual(grouped[plain.id], [])
+  }
+
+  func testWindowFrameUpdatePreservesExpandedHeightAndContentTimestamp() throws {
+    let database = try makeDatabase()
+    let note = try database.createNote(title: "Window", plainText: "Body", color: .yellow)
+    try database.updateWindowFrame(noteID: note.id, x: 10, y: 20, width: 320, expandedHeight: 280)
+    let firstUpdate = try XCTUnwrap(database.note(id: note.id))
+    try database.updateWindowFrame(noteID: note.id, x: 30, y: 40, width: 340, expandedHeight: nil)
+    let collapsedUpdate = try XCTUnwrap(database.note(id: note.id))
+
+    XCTAssertEqual(collapsedUpdate.windowX, 30)
+    XCTAssertEqual(collapsedUpdate.windowY, 40)
+    XCTAssertEqual(collapsedUpdate.windowWidth, 340)
+    XCTAssertEqual(collapsedUpdate.windowHeight, 280)
+    XCTAssertEqual(collapsedUpdate.updatedAt, firstUpdate.updatedAt)
+  }
+
   func testEmptyTrashDeletesDeletedNotesAndKeepsActiveNotes() throws {
     let database = try makeDatabase()
     let active = try database.createNote(title: "Active", plainText: "Keep", color: .yellow)

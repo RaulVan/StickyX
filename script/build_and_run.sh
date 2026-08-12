@@ -6,6 +6,8 @@ APP_NAME="StickyX"
 LEGACY_APP_NAME="StickerX"
 BUNDLE_ID="com.guck.StickyX"
 MIN_SYSTEM_VERSION="14.0"
+MARKETING_VERSION="${STICKYX_VERSION:-1.0.0}"
+BUILD_NUMBER="${STICKYX_BUILD_NUMBER:-1}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -21,7 +23,8 @@ pkill -x "$LEGACY_APP_NAME" >/dev/null 2>&1 || true
 
 cd "$ROOT_DIR"
 swift build
-BUILD_BINARY="$(swift build --show-bin-path)/$APP_NAME"
+BUILD_DIR="$(swift build --show-bin-path)"
+BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
@@ -31,6 +34,10 @@ chmod +x "$APP_BINARY"
 if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
 fi
+
+while IFS= read -r resource_bundle; do
+  cp -R "$resource_bundle" "$APP_RESOURCES/"
+done < <(find "$BUILD_DIR" -maxdepth 1 -type d -name '*.bundle' -print)
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -45,6 +52,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>轻便笺</string>
   <key>CFBundleDisplayName</key>
   <string>轻便笺</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$MARKETING_VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$BUILD_NUMBER</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleIconFile</key>
@@ -85,6 +96,9 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+/usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"
+/usr/bin/codesign --verify --deep --strict "$APP_BUNDLE"
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"

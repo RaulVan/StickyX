@@ -92,24 +92,28 @@ final class StickyWindowManager {
       width: StickyWindowLayout.minimumWidth,
       height: StickyWindowLayout.collapsedHeight
     )
-    let targetSize = frame(for: note).size
-    if window.frame.size != targetSize {
+    let targetFrame = frame(for: note)
+    let sizeChanged = !approximatelyEqual(window.frame.size, targetFrame.size)
+    let originChanged = !approximatelyEqual(window.frame.origin, targetFrame.origin)
+    let hasPendingFrameUpdate = frameUpdateTokens[note.id] != nil
+    if sizeChanged || originChanged || hasPendingFrameUpdate {
       let noteID = note.id
       let updateToken = UUID()
       // Suppress delegate frame writes during our own collapse/expand animation.
       programmaticFrameUpdateNoteIDs.insert(noteID)
       frameUpdateTokens[noteID] = updateToken
       DispatchQueue.main.async { [weak self, weak window] in
-        guard let self else { return }
+        guard let self, self.frameUpdateTokens[noteID] == updateToken else { return }
         guard let window else {
           self.finishProgrammaticFrameUpdate(noteID: noteID, token: updateToken)
           return
         }
-        var frame = window.frame
-        let oldMaxY = frame.maxY
-        frame.size = targetSize
-        frame.origin.y = oldMaxY - frame.height
-        let finalFrame = frame
+        var finalFrame = targetFrame
+        if sizeChanged && !originChanged {
+          // Collapse and expand around the title bar while ordinary arrangement uses saved origins.
+          finalFrame.origin = window.frame.origin
+          finalFrame.origin.y = window.frame.maxY - finalFrame.height
+        }
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
           window.setFrame(finalFrame, display: true, animate: false)
           model.saveWindowFrame(noteID: noteID, frame: finalFrame)
@@ -124,9 +128,10 @@ final class StickyWindowManager {
           window.animator().setFrame(finalFrame, display: true)
         } completionHandler: { [weak self] in
           Task { @MainActor in
+            guard let self, self.frameUpdateTokens[noteID] == updateToken else { return }
             model.saveWindowFrame(noteID: noteID, frame: finalFrame)
             window.invalidateShadow()
-            self?.finishProgrammaticFrameUpdate(noteID: noteID, token: updateToken)
+            self.finishProgrammaticFrameUpdate(noteID: noteID, token: updateToken)
           }
         }
       }
@@ -145,20 +150,50 @@ final class StickyWindowManager {
        let width = note.windowWidth,
        let height = note.windowHeight {
       // Collapsed windows use a fixed height but keep the saved expanded height for restore.
-      return NSRect(
+      return constrainedToVisibleScreen(NSRect(
         x: x,
         y: y,
         width: StickyWindowLayout.displayWidth(savedWidth: width),
         height: StickyWindowLayout.displayHeight(isCollapsed: note.isCollapsed, savedHeight: height)
-      )
+      ))
     }
-    let offset = Double(windows.count * 28)
-    return NSRect(
-      x: 720 + offset,
-      y: 360 - offset,
-      width: StickyWindowLayout.defaultWidth,
-      height: StickyWindowLayout.displayHeight(isCollapsed: note.isCollapsed, savedHeight: nil)
-    )
+    let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    let width = CGFloat(StickyWindowLayout.defaultWidth)
+    let height = CGFloat(StickyWindowLayout.displayHeight(isCollapsed: note.isCollapsed, savedHeight: nil))
+    let offset = CGFloat((windows.count % 8) * 28)
+    return constrainedToVisibleScreen(NSRect(
+      x: screenFrame.maxX - width - 32 - offset,
+      y: screenFrame.maxY - height - 48 - offset,
+      width: width,
+      height: height
+    ))
+  }
+
+  private func constrainedToVisibleScreen(_ frame: NSRect) -> NSRect {
+    guard !NSScreen.screens.isEmpty else { return frame }
+    let screenWithLargestIntersection = NSScreen.screens
+      .map { screen in (screen, NSIntersectionRect(screen.visibleFrame, frame).width * NSIntersectionRect(screen.visibleFrame, frame).height) }
+      .max { $0.1 < $1.1 }
+    let screen = if let candidate = screenWithLargestIntersection, candidate.1 > 0 {
+      candidate.0
+    } else {
+      NSScreen.main ?? NSScreen.screens[0]
+    }
+    let visibleFrame = screen.visibleFrame
+    var constrained = frame
+    constrained.size.width = min(max(constrained.width, CGFloat(StickyWindowLayout.minimumWidth)), visibleFrame.width)
+    constrained.size.height = min(max(constrained.height, CGFloat(StickyWindowLayout.collapsedHeight)), visibleFrame.height)
+    constrained.origin.x = min(max(constrained.minX, visibleFrame.minX), visibleFrame.maxX - constrained.width)
+    constrained.origin.y = min(max(constrained.minY, visibleFrame.minY), visibleFrame.maxY - constrained.height)
+    return constrained
+  }
+
+  private func approximatelyEqual(_ lhs: NSSize, _ rhs: NSSize) -> Bool {
+    abs(lhs.width - rhs.width) < 0.5 && abs(lhs.height - rhs.height) < 0.5
+  }
+
+  private func approximatelyEqual(_ lhs: NSPoint, _ rhs: NSPoint) -> Bool {
+    abs(lhs.x - rhs.x) < 0.5 && abs(lhs.y - rhs.y) < 0.5
   }
 
   private func hideStandardWindowControls(_ window: NSWindow) {

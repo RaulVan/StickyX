@@ -23,25 +23,25 @@ struct StickerCommands: Commands {
         model.toggleSelectedDesktopWindow()
       }
       .keyboardShortcut("d", modifiers: [.command, .shift])
-      .disabled(model.selectedNote == nil)
+      .disabled(model.commandTargetNote == nil)
 
       Button(L10n.string(.floatOnTop, language: language)) {
         model.toggleSelectedFloatOnTop()
       }
       .keyboardShortcut("f", modifiers: [.command, .shift])
-      .disabled(model.selectedNote == nil)
+      .disabled(model.commandTargetNote == nil)
 
       Button(L10n.string(.translucent, language: language)) {
         model.toggleSelectedTranslucent()
       }
       .keyboardShortcut("t", modifiers: [.command, .shift])
-      .disabled(model.selectedNote == nil)
+      .disabled(model.commandTargetNote == nil)
 
       Button(L10n.string(.toggleCollapse, language: language)) {
         model.toggleSelectedCollapsed()
       }
       .keyboardShortcut("m", modifiers: [.command, .shift])
-      .disabled(model.selectedNote == nil)
+      .disabled(model.commandTargetNote == nil)
 
       Divider()
 
@@ -56,7 +56,7 @@ struct StickerCommands: Commands {
         model.printSelectedNote()
       }
       .keyboardShortcut("p")
-      .disabled(model.selectedNote == nil)
+      .disabled(model.commandTargetNote == nil)
     }
 
     CommandMenu(L10n.string(.colorMenu, language: language)) {
@@ -64,7 +64,7 @@ struct StickerCommands: Commands {
         Button(model.displayName(for: color, language: language)) {
           model.setSelectedColor(color)
         }
-        .disabled(model.selectedNote == nil)
+        .disabled(model.commandTargetNote == nil)
       }
     }
 
@@ -87,7 +87,7 @@ struct StickerCommands: Commands {
       Button(L10n.string(.exportText, language: language)) {
         model.exportSelectedText()
       }
-      .disabled(model.selectedNote == nil)
+      .disabled(model.commandTargetNote == nil)
     }
 
     CommandGroup(after: .saveItem) {

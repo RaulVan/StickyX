@@ -23,4 +23,10 @@ final class AppLanguageTests: XCTestCase {
     XCTAssertEqual(L10n.string(.tagColorMenu, language: .zhHans), "标签颜色")
     XCTAssertEqual(L10n.string(.tagColorMenu, language: .en), "Tag Color")
   }
+
+  func testContextualEmptyStatesAreLocalized() {
+    XCTAssertEqual(L10n.string(.noSearchResultsTitle, language: .zhHans), "未找到便笺")
+    XCTAssertEqual(L10n.string(.emptyTrashStateTitle, language: .en), "Trash is Empty")
+    XCTAssertEqual(L10n.emptyTagTitle("Work", language: .en), "No Notes in Work")
+  }
 }

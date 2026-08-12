@@ -49,12 +49,20 @@ struct RichTextEditor: NSViewRepresentable {
 
   func updateNSView(_ scrollView: NSScrollView, context: Context) {
     guard let textView = scrollView.documentView as? NSTextView else { return }
+    context.coordinator.parent = self
     applyBackgroundColor(to: scrollView)
     let normalized = StickyTextFormatter.normalizedChecklistMarkers(in: attributedText)
     if !textView.attributedString().isEqual(to: normalized) {
+      let selectedRanges = textView.selectedRanges
       context.coordinator.isProgrammaticUpdate = true
       textView.textStorage?.setAttributedString(normalized)
       textView.typingAttributes = StickyTextFormatter.defaultAttributes
+      textView.selectedRanges = selectedRanges.map { value in
+        let range = value.rangeValue
+        let location = min(range.location, normalized.length)
+        let length = min(range.length, normalized.length - location)
+        return NSValue(range: NSRange(location: location, length: length))
+      }
       context.coordinator.isProgrammaticUpdate = false
     }
   }
@@ -111,7 +119,8 @@ final class ChecklistTextView: NSTextView {
     }
     let paragraphRange = nsString.paragraphRange(for: NSRange(location: characterIndex, length: 0))
     let line = nsString.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
-    let relativeX = containerPoint.x - layoutManager.boundingRect(forGlyphRange: paragraphRange, in: textContainer).minX
+    let glyphRange = layoutManager.glyphRange(forCharacterRange: paragraphRange, actualCharacterRange: nil)
+    let relativeX = containerPoint.x - layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).minX
     // Treat clicks near a checklist prefix as checkbox toggles and leave normal editing elsewhere.
     if ChecklistParserAdapter.isChecklistLine(line), relativeX < 36 {
       let lineNumber = nsString.substring(to: paragraphRange.location).components(separatedBy: .newlines).count - 1
